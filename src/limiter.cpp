@@ -1,4 +1,5 @@
 #include "limiter.hpp"
+#include "lru.cpp"
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -65,6 +66,8 @@ bool	init_limiter(int32_t max_tokens, uint64_t refill_ms, const char** err_msg)
 		table[i].ts.store(0, std::memory_order_relaxed);
 		i++;
 	}
+
+	init_lru_links();
 
 	return true;
 }

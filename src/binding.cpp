@@ -9,6 +9,7 @@ Napi::Value	InitSharedMemory(const Napi::CallbackInfo& info)
 	Napi::Object	config;
 	int32_t		max_tokens = 10;
 	uint64_t	refill_ms = 1000;
+	EvictionPolicy policy = EvictionPolicy::LRU;
 	const char*	err_msg = nullptr;
 
 	if (info.Length() > 0 && info[0].IsObject())
@@ -18,6 +19,11 @@ Napi::Value	InitSharedMemory(const Napi::CallbackInfo& info)
 			max_tokens = config.Get("maxTokens").As<Napi::Number>().Int32Value();
 		if (config.Has("windowMs"))
 			refill_ms = config.Get("windowMs").As<Napi::Number>().Int64Value();
+		if (config.Has("policy"))
+		{
+			std::string p = config.Get("policy").As<Napi::String>().Utf8Value();
+			if (p == "FIFO") policy = EvictionPolicy::FIFO;
+		}
 	}
 
 	if (g_initialized)
@@ -26,12 +32,18 @@ Napi::Value	InitSharedMemory(const Napi::CallbackInfo& info)
 		return env.Null();
 	}
 
-	if (!init_limiter(max_tokens, refill_ms, &err_msg))
+	LimiterConfig lconfig;
+	lconfig.max_tokens = max_tokens;
+	lconfig.refill_ms = refill_ms;
+	lconfig.policy = policy;
+
+	if (!init_limiter(lconfig, &err_msg))
 	{
 		Napi::Error::New(env, err_msg).ThrowAsJavaScriptException();
 		return env.Null();
 	}
 
+	lru_init();
 	g_initialized = true;
 	return Napi::Boolean::New(env, true);
 }
@@ -59,6 +71,12 @@ Napi::Object	Register(Napi::Env env, Napi::Object exports)
 	exports.Set("initSharedMemory", Napi::Function::New(env, InitSharedMemory));
 	exports.Set("consumeTokenFast", Napi::Function::New(env, ConsumeTokenFast));
 	exports.Set("cleanup", Napi::Function::New(env, Cleanup));
+	exports.Set("getStats", Napi::Function::New(env, [](const Napi::CallbackInfo& info) -> Napi::Value {
+		Napi::Env env = info.Env();
+		LimiterStats stats;
+		// In a full impl, read from shared memory
+		return Napi::Object::New(env);
+	}));
 	return exports;
 }
 

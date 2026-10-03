@@ -5,7 +5,7 @@ const app = express();
 const PORT = 3000;
 
 try {
-	rateLimiter.InitSharedMemory();
+	rateLimiter.initSharedMemory({ maxTokens: 100, windowMs: 1000 });
 	console.log(" C++ Shared Memory Initialized");
 } catch (error) {
 	console.error(" Failed to initialize:", error);
@@ -14,7 +14,7 @@ try {
 
 app.use((req, res, next) => {
 	const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-	if (!rateLimiter.ConsumeTokenFast(clientIp)){
+	if (!rateLimiter.consumeTokenFast(clientIp)) {
 		return res.status(429).json({ error: "Too Many Requests" });
 	}
 	next();
