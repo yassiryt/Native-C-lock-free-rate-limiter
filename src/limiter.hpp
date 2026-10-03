@@ -5,15 +5,16 @@
 #include <cstddef>
 #include <cstdint>
 
-struct Bucket {
-    std::atomic<uint64_t>   ip_hash;
-    std::atomic<uint64_t>   ts;
-    std::atomic<int32_t>    toks;
+struct alignas(64)	Bucket{
+	std::atomic<uint64_t>	ip_hash;
+	std::atomic<uint64_t>	ts;
+	std::atomic<int32_t>	toks;
 };
 
-const size_t    TABLE_SIZE = 65536;
+const size_t	TABLE_SIZE = 65536;
 
-bool            init_limiter(int32_t max_tokens, uint64_t refill_ms, const char* error_buf);
-bool            consume_token(const char* ip, int32_t max_tokens, uint64_t refill_ms);
+bool	init_limiter(int32_t max_tokens, uint64_t refill_ms, const char** err_msg);
+bool	consume_token(const char* ip_str, int32_t max_tokens, uint64_t refill_ms);
+void	cleanup_limiter();
 
 #endif

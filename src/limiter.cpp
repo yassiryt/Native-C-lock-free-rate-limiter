@@ -3,15 +3,25 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <chrono>
-#include <functional>
 #include <string>
 #include <algorithm>
-
-#ifndef MAP_ANONYMOUS
-# define MAP_ANONYMOUS MAP_ANON
-#endif
+#include <random>
 
 static Bucket*	table = nullptr;
+static uint64_t	g_hash_seed = 0;
+
+uint64_t	secure_hash(const char* str)
+{
+	uint64_t	hash;
+
+	hash = g_hash_seed;
+	while (*str)
+	{
+		hash ^= (uint8_t)(*str++);
+		hash *= 1099511628211ULL;
+	}
+	return hash;
+}
 
 bool	init_limiter(int32_t max_tokens, uint64_t refill_ms, const char** err_msg)
 {
@@ -20,6 +30,9 @@ bool	init_limiter(int32_t max_tokens, uint64_t refill_ms, const char** err_msg)
 
 	if (table)
 		return true;
+
+	if (g_hash_seed == 0)
+		g_hash_seed = std::chrono::steady_clock::now().time_since_epoch().count();
 
 	shm_fd = shm_open("/node_rate_limiter_shm", O_CREAT | O_RDWR, 0666);
 	if (shm_fd < 0)
@@ -73,9 +86,13 @@ bool	consume_token(const char* ip_str, int32_t max_tokens, uint64_t refill_ms)
 	if (!table || !ip_str)
 		return false;
 
-	ip_h = std::hash<std::string>{}(ip_str);
+	ip_h = secure_hash(ip_str);
 	idx = ip_h % TABLE_SIZE;
 	attempts = 0;
+
+	now = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()
+	).count();
 
 	while (attempts < 100)
 	{
@@ -93,15 +110,22 @@ bool	consume_token(const char* ip_str, int32_t max_tokens, uint64_t refill_ms)
 		if (stored_hash == ip_h)
 			break;
 
+		last = b->ts.load(std::memory_order_acquire);
+		if (last > 0 && (now - last) > refill_ms)
+		{
+			if (b->ip_hash.compare_exchange_strong(stored_hash, ip_h, std::memory_order_acq_rel))
+			{
+				b->toks.store(max_tokens, std::memory_order_release);
+				b->ts.store(now, std::memory_order_release);
+				break;
+			}
+		}
+
 		idx = (idx + 1) % TABLE_SIZE;
 		attempts++;
 	}
 
 	b = &table[idx];
-	now = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()
-	).count();
-
 	last = b->ts.load(std::memory_order_acquire);
 	toks = b->toks.load(std::memory_order_acquire);
 	add = (now - last) / refill_ms;
@@ -111,8 +135,8 @@ bool	consume_token(const char* ip_str, int32_t max_tokens, uint64_t refill_ms)
 		updated = std::min(max_tokens, toks + add);
 		if (b->ts.compare_exchange_strong(last, now))
 		{
-			b->toks.store(updated, std::memory_order_release);
-			toks = updated;
+			toks = b->toks.load(std::memory_order_acquire);
+			b->toks.store(std::min(max_tokens, toks + add), std::memory_order_release);
 		}
 	}
 
@@ -123,4 +147,14 @@ bool	consume_token(const char* ip_str, int32_t max_tokens, uint64_t refill_ms)
 	}
 
 	return false;
+}
+
+void	cleanup_limiter()
+{
+	if (table && table != MAP_FAILED)
+	{
+		munmap(table, TABLE_SIZE * sizeof(Bucket));
+		table = nullptr;
+	}
+	shm_unlink("/node_rate_limiter_shm");
 }
